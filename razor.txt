@@ -1,0 +1,386 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import Swal from 'sweetalert2';
+import { Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, TablePagination, Button, Typography, IconButton, Checkbox, } from '@mui/material';
+import { RemoveRedEye } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
+import { useApis } from '../../Api_url';
+import AddPurchaseDialog from './AddPurchaseDialog';
+
+const PurchaseInformation = () => {
+    const { postJson, getJson, deleteJson } = useApis();
+    const [farmersData, setFarmersData] = useState([]);
+    const [page, setPage] = useState(0);
+    const [rowsPerPage, setRowsPerPage] = useState(10);
+    const [totalCount, setTotalCount] = useState(0);
+    const [selectedFarmers, setSelectedFarmers] = useState([]);
+    const [error, setError] = useState(null);
+    const [openDialog, setOpenDialog] = useState(false);
+    const [paymentLink, setPaymentLink] = useState(null);
+    const [openPaymentDialog, setOpenPaymentDialog] = useState(false);
+    const [nextPage, setNextPage] = useState(null);
+    const [previousPage, setPreviousPage] = useState(null);
+
+    const navigate = useNavigate();
+    const accessToken = localStorage.getItem('access_token');
+
+    // Fetch purchase request data from the API
+    const fetchPurchaseRequestData = async () => {
+        try {
+            const response = await axios.get('https://apis.agrisarathi.com/fposupplier/RequestPurchasetoVendor', {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                },
+                params: {
+                    page: page + 1,
+                    page_size: rowsPerPage,
+                },
+            });
+
+            const { count, next, previous, results } = response?.data;
+            setFarmersData(results.products);
+            setTotalCount(count);
+            setNextPage(next);
+            setPreviousPage(previous);
+        } catch (err) {
+            setError('Failed to fetch data.');
+            console.error(err);
+        }
+    };
+
+    useEffect(() => {
+        fetchPurchaseRequestData();
+    }, [page, rowsPerPage, accessToken]);
+
+    const handleChangePage = (event, newPage) => {
+        setPage(newPage);
+    };
+
+    const handleChangeRowsPerPage = (event) => {
+        setRowsPerPage(parseInt(event.target.value, 10));
+        setPage(0);
+    };
+
+    const handleSelectFarmer = (requestCode) => {
+        setSelectedFarmers(prevState => {
+            if (prevState.includes(requestCode)) {
+                return prevState?.filter(code => code !== requestCode);
+            } else {
+                return [...prevState, requestCode];
+            }
+        });
+    };
+
+    const handleBulkDelete = async () => {
+        if (selectedFarmers.length === 0) {
+            Swal.fire({
+                title: 'Error!',
+                text: 'No Members selected for deletion.',
+                icon: 'error',
+                confirmButtonText: 'OK'
+            });
+            return;
+        }
+
+        const accessToken = localStorage.getItem('access_token');
+        if (!accessToken) {
+            setError('No access token found.');
+            return;
+        }
+
+        try {
+            const response = await axios.delete('https://apis.agrisarathi.com/fposupplier/RequestPurchasetoVendor', {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                },
+                data: {
+                    request_code: selectedFarmers,
+                }
+            });
+
+            if (response?.data?.status === 'success') {
+                Swal.fire({
+                    title: 'Success!',
+                    text: response.data.message || 'Items deleted successfully!',
+                    icon: 'success',
+                    timer: 2000,
+                    showConfirmButton: false,
+                });
+                fetchPurchaseRequestData();
+                setSelectedFarmers([]);
+            } else {
+                Swal.fire({
+                    title: 'Error!',
+                    text: response.data.message || 'Failed to delete items.',
+                    icon: 'error',
+                    confirmButtonText: 'OK'
+                });
+            }
+        } catch (error) {
+            Swal.fire({
+                title: 'Error!',
+                text: error.response?.data?.message || 'An error occurred during deletion.',
+                icon: 'error',
+                confirmButtonText: 'OK'
+            });
+            console.error('Error during bulk delete:', error.response || error);
+        }
+    };
+
+    const handlePaymentClick = (row) => {
+        const paymentLink = row?.link?.length > 0 ? row?.link[0]?.razorpay_payment_link : null;
+
+        if (paymentLink) {
+            setPaymentLink(paymentLink);
+            setOpenPaymentDialog(true);
+        } else {
+            console.log("No payment link available.");
+        }
+    };
+
+    // Function to open Razorpay payment page
+  // Function to open Razorpay payment page
+const openRazorpay = (orderId, amount) => {
+    if (typeof window.Razorpay === 'undefined') {
+        console.error("Razorpay SDK not loaded.");
+        return;
+    }
+
+    const options = {
+        key: "rzp_live_3MergdRjb11ky4",  // Ensure this key is correct
+        amount: amount * 100,  // Ensure this is in the smallest unit (paise for INR)
+        currency: "INR",
+        order_id: orderId,  // Ensure this is the correct Razorpay order ID
+        handler: function (response) {
+            // Log the full response object for debugging
+            console.log('Razorpay response:', response);
+
+            // Check if payment details are present in the response
+            const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = response;
+
+            // Log missing details for further debugging
+            if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+                console.error("Missing payment details in response:", response);
+                Swal.fire({
+                    title: 'Error!',
+                    text: 'Payment details are incomplete. Please try again.',
+                    icon: 'error',
+                    confirmButtonText: 'OK'
+                });
+                return;
+            }
+
+            // Call the backend API to verify the payment
+            verifyPaymentOnBackend(razorpay_payment_id, razorpay_order_id, razorpay_signature);
+        },
+        prefill: {
+            name: "Customer Name",
+            email: "customer@example.com"
+        },
+        notes: {
+            "product_request_code": "12345"
+        },
+        theme: {
+            color: "#F37254"
+        }
+    };
+
+    const rzp1 = new window.Razorpay(options);
+    rzp1.open();
+};
+
+// Function to verify payment on the backend
+const verifyPaymentOnBackend = async (razorpay_payment_id, razorpay_order_id, razorpay_signature) => {
+    // Ensure that all payment details are provided
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+        console.error("Missing payment details:", {
+            razorpay_payment_id,
+            razorpay_order_id,
+            razorpay_signature
+        });
+        Swal.fire({
+            title: 'Error!',
+            text: 'Missing payment details. Please try again.',
+            icon: 'error',
+            confirmButtonText: 'OK'
+        });
+        return;
+    }
+
+    try {
+        const accessToken = localStorage.getItem('access_token');
+        if (!accessToken) {
+            console.error("Access token not found.");
+            Swal.fire({
+                title: 'Error!',
+                text: 'No access token found.',
+                icon: 'error',
+                confirmButtonText: 'OK'
+            });
+            return;
+        }
+
+        // Send the payment details to the backend API
+        const response = await axios.post('https://apis.agrisarathi.com/fposupplier/QuotationPaymentSuccess', {
+            razorpay_payment_id,
+            razorpay_order_id,
+            razorpay_signature
+        }, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${accessToken}`,
+            }
+        });
+
+        // Handle the response from the backend
+        if (response?.data?.status === 'success') {
+            Swal.fire({
+                title: 'Success!',
+                text: 'Payment verified successfully!',
+                icon: 'success',
+                confirmButtonText: 'OK'
+            });
+            fetchPurchaseRequestData();  // Refresh data after successful payment
+        } else {
+            Swal.fire({
+                title: 'Error!',
+                text: response?.data?.message || 'Payment verification failed.',
+                icon: 'error',
+                confirmButtonText: 'OK'
+            });
+        }
+    } catch (error) {
+        // Log any error encountered during the backend verification process
+        console.error('Error during payment verification:', error.response?.data || error);
+        Swal.fire({
+            title: 'Error!',
+            text: error.response?.data?.message || 'An error occurred during payment verification.',
+            icon: 'error',
+            confirmButtonText: 'OK'
+        });
+    }
+};
+
+// Effect hook to load the Razorpay script dynamically
+useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload = () => {
+        console.log("Razorpay script loaded.");
+    };
+    script.onerror = (err) => {
+        console.error("Error loading Razorpay script:", err);
+    };
+    document.body.appendChild(script);
+
+    return () => {
+        document.body.removeChild(script);
+    };
+}, []);
+
+
+
+
+    return (
+        <div className="p-6">
+            <Typography variant="h4" gutterBottom>Request Purchase Information</Typography>
+
+            {error && <Typography color="error">{error}</Typography>}
+
+            <div className="flex  md:flex-row gap-4 mb-5 md:w-2/3">
+                <Button className="bg-[#00B251] w-full md:w-1/2 sm:w-auto py-3" variant="contained" onClick={() => setOpenDialog(true)}>
+                    Add purchase
+                </Button>
+                <Button
+                    className=" w-full md:w-1/2 sm:w-auto py-3"
+                    color='secondary'
+                    variant="contained"
+                    onClick={handleBulkDelete}
+                    disabled={selectedFarmers.length === 0}
+                >
+                    Delete Selected Purchase
+                </Button>
+            </div>
+
+            <TableContainer component={Paper} className="overflow-x-auto mt-6">
+                <Table aria-label="farmers table">
+                    <TableHead>
+                        <TableRow className="bg-gray-200 text-white">
+                            <TableCell padding="checkbox">
+                                <Checkbox
+                                    checked={selectedFarmers?.length === farmersData?.length}
+                                    onChange={() => {
+                                        if (selectedFarmers?.length === farmersData?.length) {
+                                            setSelectedFarmers([]);
+                                        } else {
+                                            setSelectedFarmers(farmersData?.map(f => f.request_code));
+                                        }
+                                    }}
+                                />
+                            </TableCell>
+                            <TableCell className="text-white">S.No</TableCell>
+                            <TableCell className="text-white">Request code</TableCell>
+                            <TableCell className="text-white">Status</TableCell>
+                            <TableCell className="text-white">Vendor</TableCell>
+                            <TableCell className="text-white hidden lg:table-cell">Actions</TableCell>
+                            <TableCell className="text-white hidden lg:table-cell">Payment</TableCell>
+                        </TableRow>
+                    </TableHead>
+
+                    <TableBody>
+                        {farmersData?.length > 0 ? farmersData.map((row, index) => (
+                            <TableRow key={row?.request_code} className={`hover:bg-gray-100 ${index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}`}>
+                                <TableCell padding="checkbox">
+                                    <Checkbox
+                                        checked={selectedFarmers.includes(row?.request_code)}
+                                        onChange={() => handleSelectFarmer(row?.request_code)}
+                                    />
+                                </TableCell>
+                                <TableCell>{index + 1}</TableCell>
+                                <TableCell>{row?.request_code}</TableCell>
+                                <TableCell>{row?.status}</TableCell>
+                                <TableCell>{row?.vendor}</TableCell>
+                                <TableCell>
+                                    <IconButton onClick={() => navigate(`/purchase/${row.request_code}`)}>
+                                        <RemoveRedEye />
+                                    </IconButton>
+                                </TableCell>
+                                <TableCell>
+                                    <Button
+                                        variant="contained"
+                                        color="primary"
+                                        disabled={row?.status !== 'payment_pending'}
+                                        onClick={() => openRazorpay(row?.link?.razorpay_order_id, row?.amount,)} // Call Razorpay
+                                    >
+                                        Payment
+                                    </Button>
+                                </TableCell>
+                            </TableRow>
+                        )) :
+                            <TableRow>
+                                <TableCell colSpan={7}>
+                                    <Typography variant='h6' textAlign='center'>
+                                        No Data
+                                    </Typography>
+                                </TableCell>
+                            </TableRow>}
+                    </TableBody>
+                </Table>
+            </TableContainer>
+
+            <TablePagination
+                rowsPerPageOptions={[10, 25, 50]}
+                component="div"
+                count={totalCount}
+                rowsPerPage={rowsPerPage}
+                page={page}
+                onPageChange={handleChangePage}
+                onRowsPerPageChange={handleChangeRowsPerPage}
+            />
+
+            {openDialog && <AddPurchaseDialog openDialog={openDialog} setOpenDialog={setOpenDialog} />}
+        </div>
+    );
+};
+
+export default PurchaseInformation;
